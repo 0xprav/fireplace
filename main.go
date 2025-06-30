@@ -11,7 +11,7 @@ import (
 	"log"
 	"os"
 	"time"
-
+	"os/exec"
 	"golang.org/x/term"
 )
 
@@ -27,6 +27,8 @@ var fireplaceB64 string
 
 // ---------- main ----------
 func main() {
+	stop := keepAwake()
+	defer stop()
 	frames, delays := decodeGIF()
 	clearScreen()
 
@@ -53,6 +55,15 @@ func decodeGIF() ([]*image.Paletted, []int) {
 		log.Fatalf("gif decode: %v", err)
 	}
 	return g.Image, g.Delay
+}
+
+func keepAwake() (stop func()) {
+	cmd := exec.Command("caffeinate", "-dimsu")
+	_ = cmd.Start()
+
+	return func() {
+		_ = cmd.Process.Kill()
+	}
 }
 
 // --- MODIFIED: render now accepts startTime to calculate and display the timer ---
