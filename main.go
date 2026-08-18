@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"fmt"
@@ -10,8 +11,11 @@ import (
 	"image/gif"
 	"log"
 	"os"
-	"time"
 	"os/exec"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"golang.org/x/term"
 )
 
@@ -22,24 +26,40 @@ const (
 )
 
 // ---------- embed fireplace.txt ----------
+//
 //go:embed fireplace.txt
 var fireplaceB64 string
 
 // ---------- main ----------
 func main() {
-	stop := keepAwake()
-	defer stop()
 	frames, delays := decodeGIF()
-	clearScreen()
 
-	// --- NEW: Record the start time ---
+	ctx, stopSignals := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGHUP,
+		syscall.SIGQUIT,
+		syscall.SIGTERM,
+	)
+	defer stopSignals()
+
+	restoreTerminal := useAlternateScreen()
+	defer restoreTerminal()
+
+	stopAwake := keepAwake()
+	defer stopAwake()
+
 	startTime := time.Now()
 
 	for {
 		for i, img := range frames {
-			// --- MODIFIED: Pass start time to render ---
 			render(img, startTime)
-			time.Sleep(time.Duration(delays[i]) * 10 * time.Millisecond)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(delays[i]) * 10 * time.Millisecond):
+			}
 		}
 	}
 }
@@ -94,7 +114,10 @@ func render(img image.Image, startTime time.Time) {
 			r, g, b, _ := img.At(bounds.Min.X+srcX, bounds.Min.Y+srcY).RGBA()
 			buf.WriteString(fmt.Sprintf("\x1b[38;2;%d;%d;%dm%s", r>>8, g>>8, b>>8, blockRune))
 		}
-		buf.WriteString("\x1b[0m\n")
+		buf.WriteString("\x1b[0m")
+		if y < termRows-1 {
+			buf.WriteByte('\n')
+		}
 	}
 
 	// --- NEW: Timer Overlay Logic ---
@@ -112,8 +135,8 @@ func render(img image.Image, startTime time.Time) {
 	// 3. Append ANSI codes to the buffer to draw the text
 	buf.WriteString(fmt.Sprintf("\x1b[%d;%dH", termRows, textCol)) // Move cursor to position
 	buf.WriteString("\x1b[38;2;255;255;255;48;2;0;0;0m")           // Set style: White text on Black background
-	buf.WriteString(timerText)                                    // Write the text
-	buf.WriteString("\x1b[0m")                                    // Reset all styles
+	buf.WriteString(timerText)                                     // Write the text
+	buf.WriteString("\x1b[0m")                                     // Reset all styles
 
 	// Print the entire buffer (image + text overlay) at once
 	fmt.Print(buf.String())
@@ -130,4 +153,12 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("Uptime: %02d:%02d:%02d", h, m, s)
 }
 
-func clearScreen() { fmt.Print("\x1b[2J") }
+func useAlternateScreen() (restore func()) {
+	// The alternate screen keeps animation frames out of the terminal history.
+	// Leaving it restores the screen that was visible before Fireplace started.
+	fmt.Print("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H")
+
+	return func() {
+		fmt.Print("\x1b[0m\x1b[?25h\x1b[?1049l")
+	}
+}
