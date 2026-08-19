@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/gif"
 	"log"
 	"os"
@@ -65,7 +66,7 @@ func main() {
 }
 
 // ---------- helpers ----------
-func decodeGIF() ([]*image.Paletted, []int) {
+func decodeGIF() ([]image.Image, []int) {
 	raw, err := base64.StdEncoding.DecodeString(fireplaceB64)
 	if err != nil {
 		log.Fatalf("base64 decode: %v", err)
@@ -74,7 +75,25 @@ func decodeGIF() ([]*image.Paletted, []int) {
 	if err != nil {
 		log.Fatalf("gif decode: %v", err)
 	}
-	return g.Image, g.Delay
+	return compositeFrames(g), g.Delay
+}
+
+func compositeFrames(g *gif.GIF) []image.Image {
+	bounds := image.Rect(0, 0, g.Config.Width, g.Config.Height)
+	canvas := image.NewRGBA(bounds)
+	frames := make([]image.Image, 0, len(g.Image))
+
+	for _, frame := range g.Image {
+		// GIF frames can contain transparent pixels that retain pixels from the
+		// prior frame. Draw each frame over the canvas before saving it.
+		draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
+
+		composite := image.NewRGBA(bounds)
+		draw.Draw(composite, bounds, canvas, bounds.Min, draw.Src)
+		frames = append(frames, composite)
+	}
+
+	return frames
 }
 
 func keepAwake() (stop func()) {
